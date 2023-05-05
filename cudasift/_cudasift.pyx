@@ -188,6 +188,73 @@ cdef class PySiftData:
             pandas.Series(h_data[:, match_error_off], name="match_error"),
             pandas.Series(h_data[:, subsampling_off], name="subsampling")
             ), axis=1), h_data[:, -128:]
+
+    def to_numpy(self):
+        '''Convert the device-side SIFT data to a numpy array
+
+        returns a numoy data array with the per-keypoint fields: xpos, ypos,
+            scale, sharpness, edgeness, orientation, score and ambiguity
+            AND a numpy N x 128 array of the SIFT features per keypoint
+        '''
+        cdef:
+            SiftData *data = &self.data
+            SiftPoint *pts
+            void *dest
+            size_t data_size = data.numPts * sizeof(SiftPoint)
+            int error
+            int state
+            np.ndarray[np.float32_t, ndim=2, mode='c'] h_data
+            np.ndarray[np.int32_t, ndim=1, mode='c'] match_data
+            size_t idx
+        nKeypoints = data.numPts;
+        if nKeypoints == 0:
+            empty = np.zeros(0, np.float32)
+            return np.empty((0, 13)), np.zeros((0, 128), np.float32)
+        stride = sizeof(SiftPoint) / sizeof(float)
+        dtype = np.dtype("f%d" % sizeof(float))
+        h_data = np.ascontiguousarray(np.zeros((nKeypoints, stride), dtype))
+        match_data = np.ascontiguousarray(np.zeros(nKeypoints, np.int32))
+        pts = <SiftPoint *> h_data.data
+        assert h_data.size * sizeof(float) == data_size, ("h_data.size = %d, data_size = %d" % (h_data.size, data_size))
+        with nogil:
+            state = 0
+            error = cudaHostRegister(<void *> pts, data_size, 0)
+            if error == 0:
+                state = 1
+                error = cudaMemcpy(pts, data.d_data, data_size,
+                                   cudaMemcpyDeviceToHost)
+                cudaHostUnregister(pts)
+        checkError(error, "during " + ("cudaHostRegister" if state == 0 else "cudaMemcpy"))
+        for 0 <= idx < nKeypoints:
+            match_data[idx] = pts[idx].match
+        xpos_off = <size_t> (&pts.xpos - <float *> pts)
+        ypos_off = <size_t> (&pts.ypos - <float *> pts)
+        scale_off = <size_t> (&pts.scale - <float *> pts)
+        sharpness_off = <size_t> (&pts.sharpness - <float *> pts)
+        edgeness_off = <size_t> (&pts.edgeness - <float *> pts)
+        orientation_off = <size_t> (&pts.orientation - <float *> pts)
+        score_off = <size_t> (&pts.score - <float *> pts)
+        ambiguity_off = <size_t> (&pts.ambiguity - <float *> pts)
+        match_xpos_off = <size_t> (&pts.match_xpos - <float *> pts)
+        match_ypos_off = <size_t> (&pts.match_ypos - <float *> pts)
+        match_error_off = <size_t> (&pts.match_error - <float *> pts)
+        subsampling_off = <size_t> (&pts.subsampling - <float *> pts)
+        print(h_data[:, xpos_off].shape)
+        return np.vstack((
+           h_data[:, xpos_off],
+            h_data[:, ypos_off],
+            h_data[:, scale_off],
+            h_data[:, sharpness_off],
+            h_data[:, edgeness_off],
+            h_data[:, orientation_off],
+            h_data[:, score_off],
+            h_data[:, ambiguity_off],
+            match_data,
+            h_data[:, match_xpos_off],
+            h_data[:, match_ypos_off],
+            h_data[:, match_error_off],
+            h_data[:, subsampling_off]
+        )).T, h_data[:, -128:]
     
     @staticmethod
     def from_data_frame(data_frame, features):
